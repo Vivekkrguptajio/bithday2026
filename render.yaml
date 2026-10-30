@@ -1,0 +1,30 @@
+# Render Blueprint: ek hi Web Service (frontend + backend ek saath, kyunki ye ek hi Node server hai).
+# Is file ko repo ke ROOT mein hona chahiye. Agar tumne poora "BirthDay" folder GitHub pe daala hai (aur party3d uske andar hai),
+# to ye file BirthDay/ mein le jao aur neeche wali `rootDir: party3d` line se # hata do.
+services:
+  - type: web
+    name: manisha-birthday-party
+    runtime: node
+    plan: free            # free plan so jata hai (hum khud ping karte hain); pakka rakhna ho to "starter"
+    # rootDir: party3d
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: Asia/Kolkata
+      # Neeche wali values Render tumse dashboard mein poochega (git mein secret nahi jata):
+      - key: ADMIN_CODE
+        sync: false
+      - key: GIRL_CODE
+        sync: false
+      - key: METERED_APP
+        sync: false
+      - key: METERED_API_KEY
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
