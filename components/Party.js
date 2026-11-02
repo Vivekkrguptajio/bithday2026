@@ -6,6 +6,8 @@ import Scene from './Scene';
 import Landing from './Landing';
 import { BALLOONS, CAKE, REACTIONS, STALLS, giftSlot } from './layout';
 import { COLORS, HOST } from './data';
+import MelaModal, { MELA_GAMES } from './Mela';
+import { MELA_BOOTHS, RIDES, balloonSet, clockSample } from './Fun';
 import { bus } from './bus';
 import {
   playBirthday, playCrunch, playGo, playPop, playStop, playTada, setDanceZone, startMusic, stopMusic, unlockAudio,
@@ -58,6 +60,17 @@ export default function Party() {
   const [toast, setToast] = useState('');
   const [announce, setAnnounce] = useState(null);
   const [adminOpen, setAdminOpen] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(true);
+  const [where, setWhere] = useState('hall'); // 'hall' (the party) or 'fun' (Masti Duniya)
+  const [mela, setMela] = useState(null); // id of the mela booth whose pop-up is open
+  const [melaBoard, setMelaBoard] = useState({});
+  const [tickets, setTickets] = useState(() => { try { return parseInt(localStorage.getItem('mela-tickets') || '0', 10) || 0; } catch (e) { return 0; } });
+  useEffect(() => { try { localStorage.setItem('mela-tickets', String(tickets)); } catch (e) { /* private window: fine */ } }, [tickets]);
+  const buyLock = useRef(false);
+  const [snapCount, setSnapCount] = useState(0); // 3-2-1 before the selfie
+  const [snapFlash, setSnapFlash] = useState(false);
+  const [selfie, setSelfie] = useState(null); // data URL of the finished photo
+  const snapBusy = useRef(false);
   const [announceText, setAnnounceText] = useState('');
   const [wallMsg, setWallMsg] = useState(null);
 
@@ -104,7 +117,7 @@ export default function Party() {
   const leavingRef = useRef(false); // true while we leave on purpose (Exit button), so it is not reported as an error
   const choiceRef = useRef(null);
   const rlPhase = useRef('');
-  const world = useRef({ others: new Map(), me: null, hearts: [], userGifts: [] });
+  const world = useRef({ others: new Map(), me: null, hearts: [], userGifts: [], where: 'hall' });
   const inputRef = useRef(null);
   const bubbleTimers = useRef({});
   const reactTimers = useRef({});
@@ -120,6 +133,7 @@ export default function Party() {
   const privileged = isGirl || isAdmin;
 
   useEffect(() => { world.current.hearts = hearts; }, [hearts]);
+  useEffect(() => { window.__world = world; }, []); // handy for the automated browser tests
   useEffect(() => { world.current.userGifts = userGifts; }, [userGifts]);
   useEffect(() => { world.current.autoDance = autoDance; }, [autoDance]);
 
@@ -233,7 +247,7 @@ export default function Party() {
     socket.on('connect', async () => {
       // TURN servers first (so video connects across different networks), then join
       const iceServers = await fetchIce();
-      socket.emit('join', { name: name.trim() || 'Guest', color, code: code.trim() }, (res) => {
+      socket.emit('join', { name: name.trim(), color, code: code.trim() }, (res) => {
         if (!res.ok) return fail(res.error);
 
         world.current.me = res.me;
@@ -249,6 +263,7 @@ export default function Party() {
         setPopped(res.popped);
         setHearts(res.hearts || []);
         setScores(res.scores || []);
+        setMelaBoard(res.melaboard || {});
         setRl(res.rl || null);
         setQuiz(res.quiz || null);
         setUserGifts(res.userGifts || []);
@@ -306,6 +321,39 @@ export default function Party() {
       setOthers((o) => o.filter((x) => x.id !== id));
       if (rtcRef.current) rtcRef.current.close(id);
       if (gone) addChat({ sys: true, text: `${gone.name} chale gaye 👋` });
+    });
+    // somebody went through a gate (hall <-> Masti Duniya)
+    socket.on('world', ({ id, name: who, world: w, x, y, z, ry }) => {
+      if (id === world.current.me.id) {
+        world.current.where = w; setWhere(w);
+        world.current.teleport && world.current.teleport(x, z);
+        flash(w === 'fun' ? '🌈 Masti Duniya mein swagat hai! Rides, samundar, sab kuch 🎢🌊' : '🏠 Party hall wapas aa gaye 🎉');
+      } else {
+        const cur = world.current.others.get(id);
+        world.current.others.set(id, { ...(cur || {}), world: w, x, y, z, ry });
+        setOthers((o) => o.map((p) => (p.id === id ? { ...p, world: w } : p)));
+        addChat({ sys: true, text: w === 'fun' ? `🎢 ${who} Masti Duniya chale gaye` : `🏠 ${who} party hall wapas aa gaye` });
+      }
+    });
+    // every ride runs on the server's clock: sample it a few times now, and again every half minute
+    const syncClock = () => { const t0 = Date.now(); socket.emit('timesync', (srv) => clockSample(t0, srv, Date.now())); };
+    [100, 500, 1100].forEach((ms) => setTimeout(syncClock, ms));
+    const clockTimer = setInterval(() => { if (!socket.connected) clearInterval(clockTimer); else syncClock(); }, 30000);
+    world.current.say = (text) => flash(text);
+    socket.on('balloon', balloonSet);
+
+    // the mela: leaderboard, results, prizes bought with tickets
+    socket.on('melaboard', setMelaBoard);
+    socket.on('melaresult', ({ name: who, game, score, best }) => {
+      const g = MELA_GAMES[game];
+      if (g && best) addChat({ sys: true, text: `🏆 ${who} ne ${g.name} mein ${score} score kiya!` });
+    });
+    socket.on('melagift', ({ id, name: who, item, label }) => {
+      addChat({ sys: true, text: `💝 ${who} ne ${label} khareeda!` });
+      showBubble(id, label.split(' ')[0] + ' 💝');
+      const o = world.current.others.get(id);
+      if (o && bus.confetti) bus.confetti(o.x, 2, o.z, 90, PINK);
+      playTada();
     });
     socket.on('count', setCount);
     socket.on('tick', (batch) => batch.forEach((p) => {
@@ -411,8 +459,10 @@ export default function Party() {
     /* --- Heart Hunt --- */
     socket.on('heartTaken', ({ id, byId, n }) => {
       setHearts((h) => h.filter((x) => x.id !== id));
-      if (byId === world.current.me.id) { flash(`💖 +1! Tumhare ${n} hearts`); playPop(); }
+      if (byId === world.current.me.id) { flash(`🍰 +1! Tumhare ${n} slices`); playCrunch(); }
     });
+    socket.on('heartAll', (list) => setHearts(list || []));
+    socket.on('huntStart', () => addChat({ sys: true, text: '🍰 Cake ke slices hall mein aa gaye! Dhundo aur ikatthe karo, leaderboard screen par hai' }));
     socket.on('heartSpawn', (h) => setHearts((hs) => (hs.some((x) => x.id === h.id) ? hs : [...hs, h])));
     socket.on('scores', setScores);
 
@@ -479,6 +529,97 @@ export default function Party() {
   }
 
   const emitSock = useCallback((ev, ...args) => socketRef.current && socketRef.current.emit(ev, ...args), []);
+  // 📸 Selfie: 3-2-1, then a photo of the party (and your own camera as a polaroid, if it is on) with a birthday frame
+  const takeSelfie = useCallback(async () => {
+    if (snapBusy.current || !world.current.snap) return;
+    snapBusy.current = true;
+    try {
+      world.current.emote && world.current.emote('wave');
+      for (let n = 3; n > 0; n--) { setSnapCount(n); await new Promise((r) => setTimeout(r, 800)); }
+      setSnapCount(0);
+      setSnapFlash(true); setTimeout(() => setSnapFlash(false), 350);
+      playPop();
+      const scene = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = world.current.snap(); });
+      const W = scene.width, H = scene.height;
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const g = c.getContext('2d');
+      g.drawImage(scene, 0, 0, W, H);
+
+      // your own camera, as a tilted polaroid in the corner (only when the camera is on)
+      const track = localStream && localStream.getVideoTracks()[0];
+      if (camOn && track && track.readyState === 'live') {
+        const v = document.createElement('video');
+        v.muted = true; v.playsInline = true; v.srcObject = localStream;
+        await v.play().catch(() => {});
+        for (let i = 0; i < 20 && !v.videoWidth; i++) await new Promise((r) => setTimeout(r, 50));
+        if (v.videoWidth) {
+          const S = Math.round(H * 0.34), pad = Math.round(S * 0.06);
+          g.save();
+          g.translate(W - S * 0.62, H - S * 0.78); g.rotate(0.05);
+          g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = S * 0.08;
+          g.fillStyle = '#fff'; g.fillRect(-S / 2 - pad, -S / 2 - pad, S + pad * 2, S + pad * 2 + S * 0.12);
+          g.shadowBlur = 0;
+          const m = Math.min(v.videoWidth, v.videoHeight);
+          g.save(); g.translate(S / 2, 0); g.scale(-1, 1); // mirrored, like a real selfie
+          g.drawImage(v, (v.videoWidth - m) / 2, (v.videoHeight - m) / 2, m, m, 0, -S / 2, S, S);
+          g.restore();
+          g.fillStyle = '#7a1f5c'; g.textAlign = 'center'; g.textBaseline = 'middle';
+          g.font = `700 ${Math.round(S * 0.1)}px "Dancing Script", cursive`;
+          g.fillText(`💖 ${me.name}`, 0, S / 2 + S * 0.08);
+          g.restore();
+        }
+        v.srcObject = null;
+      }
+
+      // birthday frame + ribbon
+      const bw = Math.round(W * 0.012);
+      const grad = g.createLinearGradient(0, 0, W, 0);
+      grad.addColorStop(0, '#ff4f9a'); grad.addColorStop(0.5, '#ffd166'); grad.addColorStop(1, '#7c4dff');
+      g.lineWidth = bw; g.strokeStyle = grad; g.strokeRect(bw / 2, bw / 2, W - bw, H - bw);
+      const rh = Math.round(H * 0.085);
+      g.fillStyle = 'rgba(25,8,45,.78)'; g.fillRect(0, H - rh - bw, W - W * 0.3, rh);
+      g.fillStyle = '#fff'; g.textBaseline = 'middle'; g.textAlign = 'left';
+      g.font = `700 ${Math.round(rh * 0.5)}px "Dancing Script", cursive`;
+      g.fillText(`🎂 ${HOST} ki Birthday Party · ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`, W * 0.02, H - rh / 2 - bw);
+
+      setSelfie(c.toDataURL('image/jpeg', 0.92));
+    } catch (e) {
+      flash('Photo nahi ban payi 😕 Dobara try karo');
+    } finally {
+      setSnapCount(0);
+      snapBusy.current = false;
+    }
+  }, [localStream, camOn, me, flash]);
+
+  const goPortal = useCallback((to) => emitSock('goto', to), [emitSock]);
+  // mela booths: food is eaten on the spot, the photo booth takes a selfie, the rest open a pop-up
+  const openBooth = useCallback((id) => {
+    const b = MELA_BOOTHS.find((x) => x.id === id);
+    if (!b) return;
+    if (b.kind === 'food' || b.kind === 'balloon') {
+      world.current.emote && world.current.emote('eat');
+      playCrunch(); showBubble(world.current.me.id, b.yum); flash(b.yum);
+    } else if (b.kind === 'photo') takeSelfie();
+    else setMela(id);
+  }, [takeSelfie, flash, showBubble]);
+  // clicking a ride boards it if you are standing near it (on the glowing ring)
+  const boardRide = useCallback((id) => {
+    if (world.current.tryBoard && world.current.tryBoard(id)) return;
+    flash(`${RIDES[id].emoji} ${RIDES[id].name}: pehle uske paas wali chamakti hari ring par khade ho, phir E dabao`);
+  }, [flash]);
+  const finishGame = useCallback((game, score) => {
+    const earned = MELA_GAMES[game].tickets(score);
+    setTickets((t) => t + earned);
+    emitSock('melascore', { game, score });
+    return earned;
+  }, [emitSock]);
+  const buyItem = useCallback((it) => {
+    if (buyLock.current || tickets < it.cost) return;
+    buyLock.current = true; setTimeout(() => { buyLock.current = false; }, 1700);
+    setTickets((t) => t - it.cost);
+    emitSock('melagift', { item: it.id });
+    flash(`${it.emoji} ${it.name} khareed liya! 💝`);
+  }, [tickets, emitSock, flash]);
   const requestCandles = useCallback(() => emitSock('candles'), [emitSock]);
   const onPop = useCallback((id) => emitSock('pop', id), [emitSock]);
   const onGift = useCallback((i) => {
@@ -520,7 +661,7 @@ export default function Party() {
   // "Use (E)" now always answers, even when nothing is nearby.
   function useNearby() {
     const n = world.current.nearest && world.current.nearest();
-    if (!n) return flash('Paas mein koi cheez nahi. Cake, gift, stall ya hearts ke paas jao ✋');
+    if (!n) return flash('Paas mein koi cheez nahi. Cake, gift, stall ya cake slices ke paas jao ✋');
     world.current.interact();
   }
   function toggleMusic() {
@@ -588,7 +729,7 @@ export default function Party() {
     if (socketRef.current) { socketRef.current.disconnect(); socketRef.current = null; }
     world.current.others.clear();
     world.current.celebrating = false;
-    world.current.hearts = []; world.current.userGifts = [];
+    world.current.hearts = []; world.current.userGifts = []; world.current.where = 'hall'; setWhere('hall'); setMela(null);
     [bubbleTimers.current, reactTimers.current].forEach((t) => Object.values(t).forEach(clearTimeout));
     [toastTimer, announceTimer, wallTimer, giftTimer, freshTimer].forEach((t) => clearTimeout(t.current));
     setExitAsk(false); setGift(null); setGiftForm(false); setPrompt(''); setToast(''); setAnnounce(null); setWallMsg(null); setGiftView(null);
@@ -611,6 +752,9 @@ export default function Party() {
     return { mode: 'idle', scores };
   }, [giftView, quiz, rl, wallMsg, scores]);
 
+  useEffect(() => { world.current.paused = !!(mela || selfie || exitAsk || giftForm); }, [mela, selfie, exitAsk, giftForm]);
+  const melaBooth = mela ? MELA_BOOTHS.find((x) => x.id === mela) : null;
+
   // 3D landing page: click the door (or the button) to walk in. The real join starts when the door is clicked.
   if (stage === 'join') {
     return (
@@ -625,6 +769,14 @@ export default function Party() {
   const meOut = !!outIds[me.id];
   const quizPlaying = quiz && quiz.phase === 'question';
   const parsePrompt = () => {
+    if (prompt === 'portalfun') return 'E dabao: 🌈 Masti Duniya mein jao';
+    if (prompt === 'portalhall') return 'E dabao: 🏠 Party hall wapas';
+    if (prompt.startsWith('riding')) { const sec = prompt.split(':')[1]; if (sec === 'tower') return '🗼 Mouse drag = chaaro taraf dekho • E = neeche aao'; if (sec === 'balloon') return '🎈 W/A/S/D udao • R upar • F neeche • E utar jao'; return `E ya Space dabao: utar jao${sec ? ` (${sec}s baaki)` : ''}`; }
+    if (prompt.startsWith('ride:')) { const r = RIDES[prompt.slice(5)]; return r ? `E dabao: ${r.emoji} ${r.name} ki sawari` : ''; }
+    if (prompt.startsWith('booth:')) {
+      const b = MELA_BOOTHS.find((x) => x.id === prompt.slice(6));
+      return b ? `E dabao: ${b.emoji} ${b.name} ${b.kind === 'food' || b.kind === 'balloon' ? '(khao)' : b.kind === 'game' ? '(khelo)' : b.kind === 'photo' ? '(selfie)' : '(dekho)'}` : '';
+    }
     if (prompt === 'cake') {
       return !privileged ? 'Candles sirf Manisha bujha sakti hai 🎂'
         : candlesLit ? 'E dabao: candles bujhao 🕯️' : 'Candles bujh chuki hain, thodi der mein dobara jalengi';
@@ -645,7 +797,7 @@ export default function Party() {
       <div className="enterfade" />
       <Scene
         me={me} others={others} bubbles={bubbles} reacts={reacts} outIds={outIds} world={world} socket={socketRef.current}
-        candlesLit={candlesLit} popped={popped} screen={screen} hearts={hearts} userGifts={userGifts} rlActive={!!rl}
+        candlesLit={candlesLit} popped={popped} where={where} onPortal={goPortal} onBooth={openBooth} onRide={boardRide} screen={screen} hearts={hearts} userGifts={userGifts} rlActive={!!rl}
         guests={guests} hereNames={hereNames} fresh={fresh} clock={clock} celebrating={celebrating}
         streams={streams} localStream={localStream}
         onPrompt={setPrompt} onFloor={onFloor} onGift={onGift} onEat={onEat} onUserGift={onUserGift} onPop={onPop} requestCandles={requestCandles}
@@ -699,6 +851,7 @@ export default function Party() {
         </div>
       )}
 
+      <div className="leftcol">
       <div className="panel top-left">
         <b>👥 {count} log party mein</b>
         <ul>
@@ -707,26 +860,67 @@ export default function Party() {
         </ul>
         {scores.length > 0 && (
           <div className="scoreboard">
-            <b>💖 Heart Hunt</b>
+            <b>🍰 Cake Hunt</b>
             {scores.slice(0, 3).map((s, i) => <div key={i}>{['🥇', '🥈', '🥉'][i]} {s.name}: {s.n}</div>)}
           </div>
         )}
         {note && <div className="note">{note}</div>}
       </div>
 
+      <div className="chat">
+        <div className="log">
+          {chat.slice(-7).map((m, i) => (
+            <div key={i} className={m.sys ? 'sys' : m.wish ? 'wishline' : ''}>
+              {m.sys ? m.text : m.wish ? <>💌 <b>{m.name}</b> ({HOST} ke liye): {m.text}</> : <><b>{badge(m.role)}{m.name}:</b> {m.text}</>}
+            </div>
+          ))}
+        </div>
+        <form onSubmit={sendChat}>
+          <input
+            ref={inputRef} className="field" value={chatText} maxLength={126}
+            placeholder="Enter dabao aur message likho…" onChange={(e) => setChatText(e.target.value)}
+          />
+        </form>
+      </div>
+      </div>
+
       <div className="panel top-right help">
-        <b>{isGirl ? '👑 Birthday Girl' : isAdmin ? '⭐ Admin' : 'Friend'} controls</b>
-        <div>WASD / ↑←↓→ — chalo · Shift — daudo</div>
-        <div>Space — kudo · Mouse drag — camera</div>
-        <div>1 wave · 2 dance (on/off) · 3 confetti{isGirl ? ' · 4 twirl' : ''}</div>
-        <div>5 ❤️ · 6 😂 · 7 👏 · 8 🔥 reactions</div>
-        <div>E — paas ki cheez use karo</div>
-        <div>💖 Hearts ko chhuo, points milenge</div>
-        {role === 'guest' && <div className="locked">🔒 Candles, cake aur gifts sirf Manisha ke liye</div>}
+        <button className="help-head" onClick={() => setHelpOpen((v) => !v)}>
+          <b>{isGirl ? '👑 Birthday Girl' : isAdmin ? '⭐ Admin' : '🎮 Friend'} controls</b>
+          <span>{helpOpen ? '▾' : '▸'}</span>
+        </button>
+        {helpOpen && (
+          <>
+            <div className="keys">
+              <span className="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>Chalo (arrows bhi)</span>
+              <span className="k"><kbd>Shift</kbd></span><span>Daudo</span>
+              <span className="k"><kbd>Space</kbd></span><span>Kudo</span>
+              <span className="k"><kbd>Mouse drag</kbd></span><span>Camera ghumao</span>
+              <span className="k"><kbd>E</kbd></span><span>Paas ki cheez use karo</span>
+              <span className="k"><kbd>1</kbd></span><span>Wave 👋</span>
+              <span className="k"><kbd>2</kbd></span><span>Dance on/off 💃</span>
+              <span className="k"><kbd>3</kbd></span><span>Confetti 🎉</span>
+              {isGirl && <><span className="k"><kbd>4</kbd></span><span>Twirl 🌀</span></>}
+              <span className="k"><kbd>5</kbd><kbd>6</kbd><kbd>7</kbd><kbd>8</kbd></span><span>❤️ 😂 👏 🔥</span>
+            </div>
+            {where === 'fun' ? (
+              <>
+                <div className="help-tip">🟢 Hari chamakti ring par khade ho kar <b>E</b> dabao (ya ride par click karo): ride, khana, game.</div>
+                <div className="help-tip">🎟️ Games jeeto, ticket kamao, Inaam Ki Dukaan se gift khareedo. 🎆 Samundar par fireworks dekho!</div>
+              </>
+            ) : (
+              <>
+                <div className="help-tip">🍰 Cake katne ke baad slices ko chhuo, points milenge</div>
+                <div className="help-tip">🌈 Samne wali deewar ka rangeen gate (left): Masti Duniya, roller coaster aur samundar!</div>
+              </>
+            )}
+            {role === 'guest' && <div className="locked">🔒 Candles, cake aur gifts sirf Manisha ke liye</div>}
+          </>
+        )}
       </div>
 
       {isAdmin && (
-        <div className="panel admin-panel">
+        <div className="panel admin-panel" style={{ top: helpOpen ? 395 : 70, maxHeight: `calc(100vh - ${helpOpen ? 410 : 90}px)` }}>
           <button className="mini" onClick={() => setAdminOpen((v) => !v)}>🛠 Admin {adminOpen ? '▾' : '▸'}</button>
           {adminOpen && (
             <>
@@ -734,7 +928,7 @@ export default function Party() {
                 <button onClick={() => startGame('redlight')}>🚦 Red Light</button>
                 <button onClick={() => startGame('quiz')}>🧠 Quiz</button>
                 <button onClick={() => startGame('stop')}>⏹ Game stop</button>
-                <button onClick={() => startGame('resethearts')}>♻️ Hearts reset</button>
+                <button onClick={() => startGame('resethearts')}>♻️ Cake game reset</button>
               </div>
               <div className="row">
                 <button onClick={() => admin('celebrate', { on: true })}>🎉 Celebration abhi</button>
@@ -775,52 +969,77 @@ export default function Party() {
 
       {prompt && parsePrompt() && <div className="prompt">{parsePrompt()}</div>}
 
-      <div className="chat">
-        <div className="log">
-          {chat.slice(-7).map((m, i) => (
-            <div key={i} className={m.sys ? 'sys' : m.wish ? 'wishline' : ''}>
-              {m.sys ? m.text : m.wish ? <>💌 <b>{m.name}</b> ({HOST} ke liye): {m.text}</> : <><b>{badge(m.role)}{m.name}:</b> {m.text}</>}
-            </div>
-          ))}
-        </div>
-        <form onSubmit={sendChat}>
-          <input
-            ref={inputRef} className="field" value={chatText} maxLength={126}
-            placeholder="Enter dabao aur message likho…" onChange={(e) => setChatText(e.target.value)}
-          />
-        </form>
-      </div>
-
       {/* mouse-down is cancelled so a clicked button never keeps keyboard focus (otherwise Space/Enter would press it again) */}
       <div className="emotes" onMouseDown={(e) => e.preventDefault()}>
-        <button onClick={toggleMic} className={micOn ? '' : 'off'}>
-          {micLocked ? '🔒 Mic (mute)' : micOn ? '🎤 Mic' : '🔇 Mic off'}
-        </button>
-        <button onClick={toggleCam} className={camOn ? '' : 'off'}>{camOn ? '📷 Camera' : '🚫 Cam off'}</button>
-        <button onClick={toggleMusic} className={musicOn ? '' : 'off'}>{musicOn ? '🎵 Song' : '🔈 Song off'}</button>
-        <button onClick={() => world.current.look && world.current.look(Math.PI, 0.18)}>📺 Screen</button>
-        <button onClick={() => world.current.look && world.current.look(0, 0.2)}>🎥 Video wall</button>
-        <button onClick={() => emote('wave')}>👋 Wave</button>
-        <button onClick={() => emote('dance')}>💃 Dance</button>
-        <button onClick={() => { setAutoDance((v) => !v); flash(autoDance ? 'Auto-dance band: ab floor par khud nahi nachoge' : 'Auto-dance chalu: floor par khade hote hi nachoge 💃'); }} className={autoDance ? '' : 'off'}>
-          {autoDance ? '🕺 Auto-dance ON' : '🚫 Auto-dance OFF'}
-        </button>
-        <button onClick={() => emote('jump')}>⬆️ Jump</button>
-        {REACTIONS.map((r) => <button key={r} className="react" onClick={() => emitSock('react', r)}>{r}</button>)}
-        <button onClick={() => world.current.confetti && world.current.confetti()}>🎉 Confetti</button>
-        {!isGirl && <button className="gift" onClick={() => { setGfErr(''); setGiftForm(true); }}>🎁 Gift bhejo</button>}
-        {!isGirl && <button className="love" onClick={startWish}>💌 Wish</button>}
-        {privileged && (
-          <>
-            <button className="gold" onClick={requestCandles}>🕯️ Candles</button>
-            <button className="gold" onClick={() => emitSock('cutcake')}>🍰 Cake kaato</button>
-            <button className="gold" onClick={() => emitSock('wishrain')}>✨ Wish maango</button>
-          </>
+        <div className="eg">
+          <button onClick={toggleMic} className={micOn ? '' : 'off'} title={micLocked ? 'Mic (mute)' : micOn ? 'Mic' : 'Mic off'}>
+            {micLocked ? '🔒' : micOn ? '🎤' : '🔇'}<span className="lb"> Mic</span>
+          </button>
+          <button onClick={toggleCam} className={camOn ? '' : 'off'} title={camOn ? 'Camera' : 'Camera off'}>{camOn ? '📷' : '🚫'}<span className="lb"> Camera</span></button>
+          <button onClick={toggleMusic} className={musicOn ? '' : 'off'} title={musicOn ? 'Song' : 'Song off'}>{musicOn ? '🎵' : '🔈'}<span className="lb"> Song</span></button>
+        </div>
+        <div className="eg">
+          <button title="Screen" onClick={() => world.current.look && world.current.look(Math.PI, 0.18)}>📺<span className="lb"> Screen</span></button>
+          <button title="Video wall" onClick={() => world.current.look && world.current.look(0, 0.2)}>🎥<span className="lb"> Video wall</span></button>
+        </div>
+        <div className="eg">
+          <button title="Wave" onClick={() => emote('wave')}>👋<span className="lb"> Wave</span></button>
+          <button title="Dance" onClick={() => emote('dance')}>💃<span className="lb"> Dance</span></button>
+          <button title={autoDance ? 'Auto-dance ON' : 'Auto-dance OFF'} onClick={() => { setAutoDance((v) => !v); flash(autoDance ? 'Auto-dance band: ab floor par khud nahi nachoge' : 'Auto-dance chalu: floor par khade hote hi nachoge 💃'); }} className={autoDance ? '' : 'off'}>
+            {autoDance ? '🕺' : '🚫'}<span className="lb">{autoDance ? ' Auto ON' : ' Auto OFF'}</span>
+          </button>
+          <button title="Jump" onClick={() => emote('jump')}>⬆️<span className="lb"> Jump</span></button>
+          <button title="Confetti" onClick={() => world.current.confetti && world.current.confetti()}>🎉<span className="lb"> Confetti</span></button>
+          {isGirl && <button className="gold" title="Twirl" onClick={() => emote('twirl')}>🌸 Twirl</button>}
+        </div>
+        <div className="eg">
+          {REACTIONS.map((r) => <button key={r} className="react" onClick={() => emitSock('react', r)}>{r}</button>)}
+        </div>
+        <div className="eg">
+          <button className="snap" onClick={takeSelfie} title="Selfie / photo kheecho">📸 Selfie</button>
+        </div>
+        {(!isGirl || privileged) && (
+          <div className="eg">
+            {!isGirl && <button className="gift" onClick={() => { setGfErr(''); setGiftForm(true); }}>🎁 Gift bhejo</button>}
+            {!isGirl && <button className="love" onClick={startWish}>💌 Wish</button>}
+            {privileged && (
+              <>
+                <button className="gold" onClick={requestCandles}>🕯️ Candles</button>
+                <button className="gold" onClick={() => emitSock('cutcake')}>🍰 Cake kaato</button>
+                <button className="gold" onClick={() => emitSock('wishrain')}>✨ Wish maango</button>
+              </>
+            )}
+          </div>
         )}
-        {isGirl && <button className="gold" onClick={() => emote('twirl')}>🌸 Twirl</button>}
-        <button onClick={useNearby}>✋ Use (E)</button>
-        <button className="exit" onClick={() => setExitAsk(true)}>🚪 Exit</button>
+        <div className="eg">
+          <button title="Use (E)" onClick={useNearby}>✋<span className="lb"> Use (E)</span></button>
+          <button className="exit" title="Exit" onClick={() => setExitAsk(true)}>🚪<span className="lb"> Exit</span></button>
+        </div>
       </div>
+
+      {where === 'fun' && <div className="tickets" title="Mela tickets">🎟️ {tickets}</div>}
+      {melaBooth && (
+        <MelaModal
+          booth={melaBooth} tickets={tickets} board={melaBoard} meName={me.name}
+          onClose={() => setMela(null)} onFinish={finishGame} onBuy={buyItem}
+        />
+      )}
+      {snapCount > 0 && <div className="snapcount" key={snapCount}>{snapCount}</div>}
+      {snapFlash && <div className="snapflash" />}
+      {selfie && (
+        <div className="modal" onClick={() => setSelfie(null)}>
+          <div className="modal-card selfie-card" onClick={(e) => e.stopPropagation()}>
+            <div className="title small">📸 Tumhari photo ready hai!</div>
+            <img className="selfie-img" src={selfie} alt="Party selfie" />
+            {!camOn && <p className="selfie-tip">Camera on rakhoge to apni selfie bhi photo ke kone mein aayegi 😊</p>}
+            <div className="gfbtns">
+              <button className="btn ghost" onClick={() => { setSelfie(null); takeSelfie(); }}>🔄 Dobara</button>
+              <a className="btn" href={selfie} download={`${HOST.toLowerCase()}-birthday-party.jpg`}>⬇️ Download</a>
+              <button className="btn ghost" onClick={() => setSelfie(null)}>Band karo</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {exitAsk && (
         <div className="modal" onClick={() => setExitAsk(false)}>

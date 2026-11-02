@@ -1,5 +1,5 @@
 // Party games, all server-authoritative:
-//   Heart Hunt          - always on, collect floating hearts, live leaderboard
+//   Cake Hunt           - starts when Manisha cuts the cake: collect the floating cake slices, live leaderboard
 //   Red Light Green Light - Admin starts it; move on RED and you are out; first across the finish line wins
 //   Manisha Quiz        - Admin starts it; friends answer questions about Manisha (she and the Admin watch)
 const cfg = require('./party.config');
@@ -10,26 +10,35 @@ const HEARTS = 12;
 const QUESTION_MS = 15000;
 
 module.exports = function createGames(io, players) {
-  /* ------------------------------ Heart Hunt ------------------------------ */
+  /* ------------------------------ Cake Hunt ------------------------------ */
+  // (internally still called "hearts": the slices use the same pickup events as before)
   const hearts = new Map();
+  let hunting = false;
   const scores = new Map(); // socket id -> { name, n }
 
   function randPos() {
     for (let i = 0; i < 40; i++) {
       const x = (Math.random() * 2 - 1) * 12;
       const z = (Math.random() * 2 - 1) * 11.5;
-      if (Math.hypot(x, z + 5) < 3.6) continue; // cake table
+      if (Math.hypot(x, z + 5) < 4.6) continue; // cake table + the gifts around it
       if (z < -7.6 && Math.abs(x) < 9) continue; // gift rug + sofas
       return { x, z };
     }
     return { x: 0, z: 3 };
   }
-  for (let id = 0; id < HEARTS; id++) hearts.set(id, { id, ...randPos() });
+  // The slices only appear once the cake has been cut.
+  function startHunt() {
+    if (hunting) return false;
+    hunting = true;
+    for (let id = 0; id < HEARTS; id++) hearts.set(id, { id, ...randPos() });
+    io.emit('heartAll', [...hearts.values()]);
+    return true;
+  }
 
   const topHearts = (n = 5) => [...scores.values()].sort((a, b) => b.n - a.n).slice(0, n).map((s) => ({ name: s.name, n: s.n }));
 
   function collect(p, id) {
-    const h = hearts.get(id);
+    const h = hunting && hearts.get(id);
     if (!h || Math.hypot(p.x - h.x, p.z - h.z) > 2.8) return;
     hearts.delete(id);
     const s = scores.get(p.id) || { name: p.name, n: 0 };
@@ -165,6 +174,7 @@ module.exports = function createGames(io, players) {
   }
 
   return {
+    startHunt,
     snapshot: () => ({ hearts: [...hearts.values()], scores: topHearts(), rl: rlState(), quiz: quiz ? lastQuizMsg : null }),
     collect,
     answer,

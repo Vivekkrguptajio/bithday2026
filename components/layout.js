@@ -7,32 +7,37 @@ export const BZ = 13.6; // walkable half-depth
 export const WALL_H = 7;
 
 export const CAKE = { x: 0, z: -5 };
+// The gate to "Masti Duniya" (the fun-fair + beach world) stands against the front wall, on the left.
+export const HALL_PORTAL = { x: -12, z: 13.2 }; // where you stand to use it
 export const CAKE_SCALE = 0.62; // the whole cake (table + 3 hearts + candles) is drawn at this scale
 export const TABLE_R = 1.6 * CAKE_SCALE; // table radius after scaling (also used for collision)
 
+// Gifts sit in rings around the cake (cake table radius is about 1).
+// The three Admin-prepared gifts: right, left and in front of the cake.
 export const GIFTS = [
-  { x: -12.3, z: -12.4, color: '#ff4f9a' },
-  { x: -10.9, z: -13.2, color: '#7c4dff' },
-  { x: 12.3, z: -12.4, color: '#ffd166' },
+  { x: CAKE.x + 2.3, z: CAKE.z, color: '#ff4f9a' },
+  { x: CAKE.x - 2.3, z: CAKE.z, color: '#7c4dff' },
+  { x: CAKE.x, z: CAKE.z + 2.3, color: '#ffd166' },
 ];
 
-// Gifts that friends send to Manisha are laid out on the rug behind the cake (2 rows of 9, then they wrap).
+// Gifts that friends send to Manisha are placed on a wider ring around the cake (18 spots, then they wrap).
 export const GIFT_SLOTS = 18;
 export function giftSlot(id) {
-  const i = id % GIFT_SLOTS;
-  return { x: ((i % 9) - 4) * 1.25, z: -8.4 - Math.floor(i / 9) * 1.1 };
+  const a = ((id % GIFT_SLOTS) / GIFT_SLOTS) * Math.PI * 2 + Math.PI / GIFT_SLOTS;
+  return { x: CAKE.x + Math.cos(a) * 3.4, z: CAKE.z + Math.sin(a) * 3.4 };
 }
 
 // Food stalls along the side walls. side -1 = left wall (faces +x), +1 = right wall (faces -x).
+// `meme` = [top line, bottom line] of the meme board in the middle of each stall (the picture is the stall's emoji).
 export const STALLS = [
-  { x: -15.1, z: -9, side: -1, id: 'golgappa', name: 'Golgappa', emoji: '🧆', color: '#ff8e53', yum: 'Pani puri ekdum tikhi! 🔥' },
-  { x: -15.1, z: -3, side: -1, id: 'momos', name: 'Momos', emoji: '🥟', color: '#e63946', yum: 'Garma garam momos 😋' },
-  { x: -15.1, z: 3, side: -1, id: 'chai', name: 'Chai', emoji: '☕', color: '#8d5524', yum: 'Adrak wali chai ☕' },
-  { x: -15.1, z: 9, side: -1, id: 'pizza', name: 'Pizza', emoji: '🍕', color: '#d62828', yum: 'Cheese burst pizza 🍕' },
-  { x: 15.1, z: -9, side: 1, id: 'icecream', name: 'Ice Cream', emoji: '🍦', color: '#4cc9f0', yum: 'Thandi thandi ice cream 🍦' },
-  { x: 15.1, z: -3, side: 1, id: 'candy', name: 'Cotton Candy', emoji: '🍭', color: '#f72585', yum: 'Meetha meetha buddhi ke baal 🍭' },
-  { x: 15.1, z: 3, side: 1, id: 'jalebi', name: 'Jalebi', emoji: '🌀', color: '#ffb703', yum: 'Garam jalebi, rabdi ke saath 🤤' },
-  { x: 15.1, z: 9, side: 1, id: 'drink', name: 'Cold Drink', emoji: '🥤', color: '#2a9d8f', yum: 'Thanda thanda cold drink 🥤' },
+  { x: -15.1, z: -9, side: -1, id: 'golgappa', name: 'Golgappa', emoji: '🧆', color: '#ff8e53', yum: 'Pani puri ekdum tikhi! 🔥', meme: ['SAB KUCH CHHOD DO', 'GOLGAPPE WALE BHAIYA AAYE HAIN'] },
+  { x: -15.1, z: -3, side: -1, id: 'momos', name: 'Momos', emoji: '🥟', color: '#e63946', yum: 'Garma garam momos 😋', meme: ['DIET KAL SE SHURU', 'AAJ TO MOMOS'] },
+  { x: -15.1, z: 3, side: -1, id: 'chai', name: 'Chai', emoji: '☕', color: '#8d5524', yum: 'Adrak wali chai ☕', meme: ['SIRF EK CHAI', '(PEHLA KAP)'] },
+  { x: -15.1, z: 9, side: -1, id: 'pizza', name: 'Pizza', emoji: '🍕', color: '#d62828', yum: 'Cheese burst pizza 🍕', meme: ['8 SLICE KA PIZZA', 'MERE LIYE 1 SLICE'] },
+  { x: 15.1, z: -9, side: 1, id: 'icecream', name: 'Ice Cream', emoji: '🍦', color: '#4cc9f0', yum: 'Thandi thandi ice cream 🍦', meme: ['SARDI HO YA GARMI', 'ICE CREAM CHALEGI'] },
+  { x: 15.1, z: -3, side: 1, id: 'candy', name: 'Cotton Candy', emoji: '🍭', color: '#f72585', yum: 'Meetha meetha buddhi ke baal 🍭', meme: ['BACHPAN WALI FEELING', 'BUDDHI KE BAAL'] },
+  { x: 15.1, z: 3, side: 1, id: 'jalebi', name: 'Jalebi', emoji: '🌀', color: '#ffb703', yum: 'Garam jalebi, rabdi ke saath 🤤', meme: ['JALEBI SEEDHI NAHI HOTI', 'PAR MEETHI HOTI HAI'] },
+  { x: 15.1, z: 9, side: 1, id: 'drink', name: 'Cold Drink', emoji: '🥤', color: '#2a9d8f', yum: 'Thanda thanda cold drink 🥤', meme: ['ZINDAGI MEIN TENSION?', 'COLD DRINK PEE LE'] },
 ];
 export const STALL_W = 3; // along the wall
 export const STALL_D = 1.3; // depth into the room

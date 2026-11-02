@@ -435,15 +435,25 @@ export default function Landing({ name, setName, color, setColor, code, setCode,
   const timers = useRef([]);
   const flashTimer = useRef(0);
 
+  const [needName, setNeedName] = useState(false);
+  const nameRef = useRef(null);
+
   const enter = useCallback(() => {
     if (phase !== 'idle' || busy) return;
+    // a friend must type a name first (Vivek / Manisha get their names from the special code)
+    if (!name.trim() && !code.trim()) {
+      setNeedName(true);
+      if (nameRef.current) nameRef.current.focus();
+      return;
+    }
+    setNeedName(false);
     sawBusy.current = false;
     setPhase('entering');
     setFlash(false);
     clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => setFlash(true), 2400); // the bright light at the end of the hallway
     onEnter(); // starts the real join (camera/mic permission, server, ...)
-  }, [phase, busy, onEnter]);
+  }, [phase, busy, onEnter, name, code]);
 
   // joining ended but we are still here = it failed (wrong code, name not allowed...): walk back out, close the door
   useEffect(() => {
@@ -488,8 +498,8 @@ export default function Landing({ name, setName, color, setColor, code, setCode,
         onSubmit={(e) => { e.preventDefault(); enter(); }}
       >
         <input
-          className="field" value={name} maxLength={16} autoFocus placeholder="Tumhara naam"
-          onChange={(e) => setName(e.target.value)}
+          ref={nameRef} className={'field' + (needName && !name.trim() ? ' bad' : '')} value={name} maxLength={16} autoFocus placeholder="Tumhara naam"
+          onChange={(e) => { setName(e.target.value); if (e.target.value.trim()) setNeedName(false); }}
         />
         <div className="swatches">
           {COLORS.map((c) => (
@@ -505,6 +515,7 @@ export default function Landing({ name, setName, color, setColor, code, setCode,
           <button type="button" className="linkbtn" onClick={() => setShowCode(true)}>🔑 Vivek / Manisha ho? Special code daalo</button>
         )}
         {leftMsg && <div className="okmsg">{leftMsg}</div>}
+        {needName && !name.trim() && !code.trim() && <div className="err">Pehle apna naam likho, phir andar aao ✍️</div>}
         {error && <div className="err">{error}</div>}
         <button className="btn" disabled={busy}>Andar jao 🚪</button>
         <p className="hint">📷 Andar jaate hi browser camera aur mic ki permission maangega, Allow karna</p>

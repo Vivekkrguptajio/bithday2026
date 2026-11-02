@@ -23,7 +23,13 @@ const BX = 15;
 const BZ = 13.6;
 const BALLOON_COUNT = 14;
 const STALL_COUNT = 8;
-const ANIMS = ['idle', 'walk', 'wave', 'dance', 'jump', 'eat', 'twirl'];
+const ANIMS = ['idle', 'walk', 'wave', 'dance', 'jump', 'eat', 'twirl', 'ride', 'sit'];
+// "Masti Duniya" (fun fair + beach) is a second world, reached through a gate at each end.
+const FUN_B = 44; // walkable half-size of the fun world
+const HALL_GATE = { x: -12, z: 13.2 }; // stand here to use the hall's gate
+const HALL_BACK = { x: -12, z: 11.2 }; // where you appear when you come back
+const FUN_GATE = { x: 0, z: 18.4 };
+const FUN_SPAWN = { x: 0, z: 15 };
 const REACTIONS = ['❤️', '😂', '👏', '🔥'];
 
 // The codes live in .env (loaded by party.config.js). Refuse to start without them, so nobody can walk in as Admin.
@@ -51,6 +57,15 @@ app.prepare().then(async () => {
   let mutedAll = false;
   let relightTimer = null;
   const dirty = new Set();
+  // The mela's games: best score per game and player (kept in memory), and the prizes that can be "bought" with tickets.
+  const MELA_MAX = { balloon: 90, mole: 40, striker: 100, memory: 56 };
+  const MELA_ITEMS = { balloon: '🎈 Gubbara', choco: '🍫 Chocolate', letter: '💌 Love Letter', rose: '🌹 Gulab', teddy: '🧸 Teddy Bear', bouquet: '💐 Bouquet', ring: '💍 Ring' };
+  const melaBest = {};
+  const melaBoards = () => {
+    const out = {};
+    for (const g of Object.keys(MELA_MAX)) out[g] = Object.values(melaBest[g] || {}).sort((a, b) => b.score - a.score).slice(0, 5);
+    return out;
+  };
   const games = createGames(io, players);
   const gifts = await createGifts(io, store);
 
@@ -104,10 +119,51 @@ app.prepare().then(async () => {
     if (!cfg.CELEBRATION_AT && Date.now() >= sched + CELEB_MS) sched = scheduleWindow(Date.now());
   }, 1000);
 
-  const pub = (p) => ({ id: p.id, name: p.name, color: p.color, role: p.role, muted: p.muted, out: !!p.out, x: p.x, y: p.y, z: p.z, ry: p.ry, anim: p.anim });
+  const pub = (p) => ({ id: p.id, name: p.name, color: p.color, role: p.role, world: p.world, muted: p.muted, out: !!p.out, x: p.x, y: p.y, z: p.z, ry: p.ry, anim: p.anim });
   const deny = (socket, msg) => socket.emit('denied', msg);
 
+  // Hot-air balloon: whoever is in the basket steers it. The server moves it so everybody sees the same balloon.
+  const BAL_HOME = { x: 14, z: -36 }, BAL_GROUND = 0.35, BAL_TOP = 19, BAL_R = 30;
+  const balloon = { x: BAL_HOME.x, y: BAL_GROUND, z: BAL_HOME.z, vx: 0, vy: 0, vz: 0, riders: new Map() };
+  const balloonOnGround = () => balloon.y < BAL_GROUND + 0.9 && Math.hypot(balloon.x - BAL_HOME.x, balloon.z - BAL_HOME.z) < 3.5;
+  const balloonDrop = (id) => { if (balloon.riders.delete(id)) io.emit('balloon', { x: balloon.x, y: balloon.y, z: balloon.z, n: balloon.riders.size }); };
+  let balloonSent = '';
+  setInterval(() => {
+    const dt = 0.05, nowMs = Date.now();
+    let ix = 0, iz = 0, iy = 0, n = 0;
+    for (const [id, r] of balloon.riders) {
+      const p = players.get(id);
+      if (!p || p.world !== 'fun') { balloon.riders.delete(id); continue; }
+      if (nowMs - r.ts < 700) { ix += r.x; iz += r.z; iy += r.y; n++; } // stale input = hands off the controls
+    }
+    const riders = balloon.riders.size;
+    if (riders && n) {
+      const c = (v) => Math.max(-1, Math.min(1, v));
+      // momentum: it speeds up and slows down smoothly instead of jerking
+      const a = Math.min(1, dt * 4.5);
+      balloon.vx += (c(ix) * 9 - balloon.vx) * a; balloon.vz += (c(iz) * 9 - balloon.vz) * a; balloon.vy += (c(iy) * 5.5 - balloon.vy) * a;
+      balloon.x += balloon.vx * dt; balloon.z += balloon.vz * dt; balloon.y += balloon.vy * dt;
+    } else if (riders) {
+      const a = Math.min(1, dt * 3); // hands off the controls: it drifts to a stop and hovers
+      balloon.vx -= balloon.vx * a; balloon.vz -= balloon.vz * a; balloon.vy -= balloon.vy * a;
+      balloon.x += balloon.vx * dt; balloon.z += balloon.vz * dt; balloon.y += balloon.vy * dt;
+    } else {
+      balloon.vx = balloon.vy = balloon.vz = 0;
+      // empty balloon: float back home and land by itself
+      const dx = BAL_HOME.x - balloon.x, dz = BAL_HOME.z - balloon.z, d = Math.hypot(dx, dz);
+      if (d > 0.05) { const m = Math.min(d, 4 * dt); balloon.x += (dx / d) * m; balloon.z += (dz / d) * m; }
+      else { balloon.x = BAL_HOME.x; balloon.z = BAL_HOME.z; }
+      balloon.y = Math.max(BAL_GROUND, balloon.y - 2.2 * dt);
+    }
+    const ox = balloon.x - BAL_HOME.x, oz = balloon.z - BAL_HOME.z, od = Math.hypot(ox, oz);
+    if (od > BAL_R) { balloon.x = BAL_HOME.x + (ox / od) * BAL_R; balloon.z = BAL_HOME.z + (oz / od) * BAL_R; }
+    balloon.y = Math.max(BAL_GROUND, Math.min(BAL_TOP, balloon.y));
+    const snap = JSON.stringify([balloon.x.toFixed(2), balloon.y.toFixed(2), balloon.z.toFixed(2), riders]);
+    if (snap !== balloonSent) { balloonSent = snap; io.emit('balloon', { x: balloon.x, y: balloon.y, z: balloon.z, n: riders }); }
+  }, 50);
+
   io.on('connection', (socket) => {
+    socket.emit('balloon', { x: balloon.x, y: balloon.y, z: balloon.z, n: balloon.riders.size });
     const last = {};
     const cooldown = (key, ms) => {
       const now = Date.now();
@@ -150,13 +206,13 @@ app.prepare().then(async () => {
       } else if (role === 'admin') {
         name = name || cfg.ADMIN_NAME;
       } else {
-        name = name || 'Guest';
+        if (!name) return ack({ ok: false, error: 'Pehle apna naam likho ✍️' });
         if (reserved(name)) return ack({ ok: false, error: 'Ye naam reserved hai. Koi aur naam chuno.' });
       }
 
       const angle = Math.random() * Math.PI * 2;
       const p = {
-        id: socket.id, name, role, out: false,
+        id: socket.id, name, role, world: 'hall', out: false,
         color: role === 'girl' ? '#ff5fa2' : /^#[0-9a-f]{6}$/i.test(data && data.color) ? data.color : '#ff4f9a',
         muted: role === 'guest' && mutedAll,
         x: role === 'girl' ? 0 : Math.cos(angle) * 5, y: 0, z: role === 'girl' ? -1.8 : 3 + Math.sin(angle) * 3,
@@ -168,6 +224,7 @@ app.prepare().then(async () => {
         ok: true, id: p.id, me: pub(p), players: [...players.values()].map(pub),
         candlesLit, popped: [...popped], userGifts: gifts.snapshot(), guests: guestPub(), celebration: celebState(),
         ...games.snapshot(),
+        melaboard: melaBoards(),
       });
       socket.broadcast.emit('joined', pub(p));
       io.emit('count', players.size);
@@ -176,13 +233,74 @@ app.prepare().then(async () => {
     socket.on('move', (s) => {
       const p = me();
       if (!p || !s) return;
-      p.x = num(s.x, BX); p.z = num(s.z, BZ); p.y = Math.max(0, num(s.y, 3));
+      if ((s.w || 'hall') !== p.world) return; // a move sent from the other world (we just switched): ignore
+      const fun = p.world === 'fun';
+      p.x = num(s.x, fun ? FUN_B : BX); p.z = num(s.z, fun ? FUN_B : BZ); p.y = Math.max(0, num(s.y, fun ? 40 : 3));
       p.ry = num(s.ry, 10);
       let anim = ANIMS.includes(s.anim) ? s.anim : 'idle';
       if (anim === 'twirl' && p.role !== 'girl') anim = 'idle'; // twirl is Manisha's move
       p.anim = anim;
       dirty.add(p.id);
-      games.onMove(p);
+      if (!fun) games.onMove(p);
+    });
+
+    // the rides run on the clock: every player asks for the server's time so all of them agree on where a ride is
+    socket.on('timesync', (ack) => { if (typeof ack === 'function') ack(Date.now()); });
+
+    // balloon: hop in (only while it sits on the ground, at most 2 in the basket), steer with the controls, hop out
+    socket.on('balloonjoin', (ack) => {
+      const p = me();
+      const reply = (r) => { if (typeof ack === 'function') ack(r); };
+      if (!p || p.world !== 'fun') return reply({ ok: false });
+      if (balloon.riders.has(p.id)) return reply({ ok: true, x: balloon.x, y: balloon.y, z: balloon.z, seat: balloon.riders.get(p.id).seat });
+      if (!balloonOnGround()) return reply({ ok: false, why: 'air' });
+      if (balloon.riders.size >= 2) return reply({ ok: false, why: 'full' });
+      if (Math.hypot(p.x - BAL_HOME.x, p.z - (BAL_HOME.z + 4.2)) > 7) return reply({ ok: false, why: 'far' });
+      const taken = [...balloon.riders.values()].map((r) => r.seat);
+      const seat = taken.includes(0) ? 1 : 0;
+      balloon.riders.set(p.id, { x: 0, z: 0, y: 0, ts: 0, seat });
+      reply({ ok: true, x: balloon.x, y: balloon.y, z: balloon.z, seat });
+    });
+    socket.on('balloonin', (d) => {
+      const r = balloon.riders.get(socket.id);
+      if (!r || !d) return;
+      const c = (v) => Math.max(-1, Math.min(1, Number(v) || 0));
+      r.x = c(d.x); r.z = c(d.z); r.y = c(d.y); r.ts = Date.now();
+    });
+    socket.on('balloonleave', () => balloonDrop(socket.id));
+
+    // mela: a finished game, and a prize bought with tickets
+    socket.on('melascore', (d) => {
+      const p = me();
+      if (!p || p.world !== 'fun' || !d || !Object.hasOwn(MELA_MAX, d.game)) return;
+      const score = Math.floor(Number(d.score));
+      if (!(score >= 0 && score <= MELA_MAX[d.game]) || !cooldown('mela:' + d.game, 8000)) return;
+      const g = (melaBest[d.game] = melaBest[d.game] || {});
+      const key = p.name.toLowerCase();
+      const best = !g[key] || score > g[key].score;
+      if (best) g[key] = { name: p.name, score };
+      io.emit('melaresult', { name: p.name, game: d.game, score, best });
+      io.emit('melaboard', melaBoards());
+    });
+    socket.on('melagift', (d) => {
+      const p = me();
+      if (!p || p.world !== 'fun' || !d || !Object.hasOwn(MELA_ITEMS, d.item) || !cooldown('melagift', 1500)) return;
+      io.emit('melagift', { id: p.id, name: p.name, item: d.item, label: MELA_ITEMS[d.item] });
+    });
+
+    // through the gate: hall <-> Masti Duniya
+    socket.on('goto', (to) => {
+      const p = me();
+      if (!p || !cooldown('goto', 1500)) return;
+      if (to === 'fun' && p.world === 'hall') {
+        if (Math.hypot(p.x - HALL_GATE.x, p.z - HALL_GATE.z) > 4.2) return deny(socket, 'Gate ke paas jao, phir E dabao 🌈');
+        p.world = 'fun'; p.x = FUN_SPAWN.x; p.z = FUN_SPAWN.z;
+      } else if (to === 'hall' && p.world === 'fun') {
+        if (Math.hypot(p.x - FUN_GATE.x, p.z - FUN_GATE.z) > 4.2) return deny(socket, 'Gate ke paas jao, phir E dabao 🏠');
+        p.world = 'hall'; p.x = HALL_BACK.x; p.z = HALL_BACK.z;
+      } else return;
+      p.y = 0; p.ry = Math.PI; p.anim = 'idle';
+      io.emit('world', { id: p.id, name: p.name, world: p.world, x: p.x, y: 0, z: p.z, ry: p.ry });
     });
 
     socket.on('chat', (text) => {
@@ -232,7 +350,7 @@ app.prepare().then(async () => {
     // --- Games ---
     socket.on('collect', (id) => {
       const p = me();
-      if (p && Number.isInteger(id)) games.collect(p, id);
+      if (p && p.world === 'hall' && Number.isInteger(id)) games.collect(p, id);
     });
     socket.on('answer', (choice) => {
       const p = me();
@@ -276,6 +394,7 @@ app.prepare().then(async () => {
       const w = cooldownLeft('cutcake', 10000);
       if (w) return deny(socket, `Cake dobara kaatne ke liye ${w} second ruko ⏳`);
       io.emit('cutcake', { by: p.name });
+      if (games.startHunt()) io.emit('huntStart');
     });
 
     socket.on('wishrain', () => {
@@ -357,6 +476,7 @@ app.prepare().then(async () => {
     });
 
     socket.on('disconnect', () => {
+      balloon.riders.delete(socket.id);
       if (!players.delete(socket.id)) return;
       dirty.delete(socket.id);
       games.onLeave(socket.id);

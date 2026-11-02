@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { PerformanceMonitor } from '@react-three/drei';
 import * as THREE from 'three';
-import { BANNER, HOST } from './data';
+import { BANNER, HOST, SCREEN_MESSAGE } from './data';
 import {
-  BALLOONS, BLOCKS, BX, BZ, CAKE, DANCE, FINISH_Z, GIFTS, HX, HZ, REACTIONS, SOFAS, START_Z, STALLS, STALL_D, STALL_W,
+  BALLOONS, BLOCKS, BX, BZ, CAKE, DANCE, FINISH_Z, GIFTS, HALL_PORTAL, HX, HZ, REACTIONS, SOFAS, START_Z, STALLS, STALL_D, STALL_W,
   CAKE_SCALE, TABLE_R, WALL_H, giftSlot, onDanceFloor,
 } from './layout';
 import { bus } from './bus';
+import { FUN, FUN_BLOCKS, FUN_RECTS, FunWorld, MELA_BOOTHS, Portal, RIDES, RIDE_SECS, boothStand, coasterCurve, balloonState, TOWER_H, hotairCanBoard, pickSeat, ridePose, syncedNow } from './Fun';
 import { Bubble, FloatEmoji, Label } from './labels';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -56,13 +58,36 @@ function Instanced({ items, geometry }) {
 /* ------------------------------------------------------------------ */
 /* Avatar                                                              */
 /* ------------------------------------------------------------------ */
+// the player's name printed on the back of the shirt, so it reads from behind (your own view of yourself)
+function BackName({ name, z, gold }) {
+  const t = useMemo(() => {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 160;
+    const g = c.getContext('2d');
+    g.fillStyle = gold ? '#ffd166' : 'rgba(20,8,40,.82)';
+    g.beginPath(); g.roundRect(4, 4, 504, 152, 76); g.fill();
+    let px = 84; const txt = String(name || '').slice(0, 18);
+    do { g.font = '700 ' + px + 'px Poppins, "Segoe UI", sans-serif'; px -= 4; } while (g.measureText(txt).width > 440 && px > 24);
+    g.fillStyle = gold ? '#2b1b3d' : '#ffffff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(txt, 256, 84);
+    const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+    return tex;
+  }, [name, gold]);
+  return (
+    <mesh position={[0, 0.98, z]} rotation={[0, Math.PI, 0]}>
+      <planeGeometry args={[0.5, 0.156]} />
+      <meshBasicMaterial map={t} transparent toneMapped={false} />
+    </mesh>
+  );
+}
+
 export function Avatar({ color: baseColor, name, bubble, react, out, getAnim, isMe, role }) {
   const color = role === 'girl' ? '#ff5fa2' : baseColor; // Manisha's dress colour is fixed
-  const body = useRef(), lLeg = useRef(), rLeg = useRef(), lArm = useRef(), rArm = useRef(), spark = useRef();
+  const body = useRef(), lLeg = useRef(), rLeg = useRef(), lArm = useRef(), rArm = useRef(), spark = useRef(), cart = useRef();
 
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
     const a = getAnim();
+    if (cart.current) cart.current.visible = a === 'ride';
     let bob = Math.sin(t * 2) * 0.015, ls = 0, rs = 0, lax = 0, rax = 0, laz = 0.15, raz = -0.15, spin = 0, tilt = 0;
     if (a === 'walk') {
       const s = Math.sin(t * 11);
@@ -80,6 +105,10 @@ export function Avatar({ color: baseColor, name, bubble, react, out, getAnim, is
       bob = Math.abs(Math.sin(t * 10)) * 0.05;
     } else if (a === 'twirl') {
       spin = t * 7; laz = 1.3; raz = -1.3; bob = Math.abs(Math.sin(t * 3)) * 0.1;
+    } else if (a === 'ride') {
+      ls = -1.3; rs = -1.3; laz = 2.7; raz = -2.7; bob = Math.sin(t * 9) * 0.03; // sitting in the coaster, arms up
+    } else if (a === 'sit') {
+      ls = -1.3; rs = -1.3; laz = 0.7; raz = -0.7; bob = 0; // sitting on a ride, holding on
     }
     if (spark.current) spark.current.rotation.y = t * 1.6;
     if (!body.current) return;
@@ -115,6 +144,7 @@ export function Avatar({ color: baseColor, name, bubble, react, out, getAnim, is
           <capsuleGeometry args={[0.31, 0.32, 6, 14]} />
           <meshStandardMaterial color={color} roughness={0.5} />
         </mesh>
+        <BackName name={name} z={girl ? -0.43 : -0.325} gold={girl || admin} />
         {/* arms */}
         <group ref={lArm} position={[0.4, 1.13, 0]}>
           <mesh position={[0, -0.22, 0]}><capsuleGeometry args={[0.085, 0.26, 4, 8]} /><meshStandardMaterial color={color} /></mesh>
@@ -194,7 +224,12 @@ export function Avatar({ color: baseColor, name, bubble, react, out, getAnim, is
         )}
       </group>
 
-      <Label text={tag} position={[0, 2.7, 0]} style={tagStyle} height={0.34} />
+      <group ref={cart} visible={false} position={[0, -0.15, 0]}>
+        <mesh><boxGeometry args={[1.1, 0.3, 1.5]} /><meshStandardMaterial color="#e63946" /></mesh>
+        <mesh position={[0, 0.3, -0.62]}><boxGeometry args={[1.1, 0.5, 0.12]} /><meshStandardMaterial color="#fff" /></mesh>
+      </group>
+      {/* your own name is on your back (you look at it from behind); everybody else wears a tag above the head */}
+      {(!isMe || out) && <Label text={tag} position={[0, 2.7, 0]} style={tagStyle} height={0.34} />}
       {bubble && <Bubble text={bubble} position={[0, 2.95, 0]} />}
       {react && <FloatEmoji emoji={react} position={[0.8, 2.3, 0]} size={0.7} bob={0.1} onTop />}
     </group>
@@ -232,9 +267,9 @@ function Remote({ p, world, bubble, react, out }) {
 /* ------------------------------------------------------------------ */
 /* Local player (controls + camera + interaction)                      */
 /* ------------------------------------------------------------------ */
-function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, onEat, onUserGift, requestCandles }) {
+function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, onEat, onUserGift, onBooth, requestCandles }) {
   const grp = useRef();
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   const camTarget = useMemo(() => new THREE.Vector3(), []);
   const collecting = useRef(new Map());
   const st = useRef({
@@ -245,7 +280,7 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
 
   useEffect(() => {
     const s = st.current;
-    const typing = () => ['INPUT', 'TEXTAREA'].includes(document.activeElement && document.activeElement.tagName);
+    const typing = () => !!world.current.paused || ['INPUT', 'TEXTAREA'].includes(document.activeElement && document.activeElement.tagName);
 
     const setEmote = (name, ms) => { s.emote = name; s.emoteUntil = performance.now() + ms; };
     const jump = () => { if (s.y <= 0.001) s.vy = 5.6; };
@@ -261,20 +296,36 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
     world.current.confetti = () => socket.emit('confetti', { x: s.x, y: 2, z: s.z });
     // Turn the camera to the big screen (yaw PI) or back to the video wall (yaw 0).
     world.current.look = (yaw, pitch = 0.2) => { s.yaw = yaw; s.pitch = pitch; };
+    // a picture of what the camera sees right now (render first, so the canvas is never read blank)
+    world.current.snap = () => { gl.render(scene, camera); return gl.domElement.toDataURL('image/jpeg', 0.92); };
     world.current.teleport = (x, z) => {
-      s.x = x; s.z = z; s.ry = Math.PI; s.yaw = 0; s.pitch = 0.26;
+      s.x = x; s.z = z; s.ry = Math.PI; s.yaw = 0; s.pitch = 0.26; s.ride = null; s.y = 0; s.vy = 0;
       camera.position.set(x, 5, z + 8);
     };
 
     function nearest() {
-      if (Math.hypot(s.x - CAKE.x, s.z - CAKE.z) < 3.0) return { type: 'cake' };
+      if (world.current.where === 'fun') {
+        if (Math.hypot(s.x - FUN.gateStand.x, s.z - FUN.gateStand.z) < 2.4) return { type: 'portal', to: 'hall' };
+        for (const id of Object.keys(RIDES)) {
+          const st = RIDES[id].stand;
+          if (Math.hypot(s.x - st.x, s.z - st.z) < 3.4) return { type: 'ride', id };
+        }
+        for (const b of MELA_BOOTHS) {
+          const st = boothStand(b);
+          if (Math.hypot(s.x - st.x, s.z - st.z) < 2.0) return { type: 'booth', id: b.id };
+        }
+        return null;
+      }
+      if (Math.hypot(s.x - HALL_PORTAL.x, s.z - HALL_PORTAL.z) < 2.4) return { type: 'portal', to: 'fun' };
+      // gifts first (small radius), then the cake itself: they all stand close together around it
       for (let i = 0; i < GIFTS.length; i++) {
-        if (Math.hypot(s.x - GIFTS[i].x, s.z - GIFTS[i].z) < 2.2) return { type: 'gift', i };
+        if (Math.hypot(s.x - GIFTS[i].x, s.z - GIFTS[i].z) < 1.1) return { type: 'gift', i };
       }
       for (const g of world.current.userGifts || []) {
         const sl = giftSlot(g.id);
-        if (Math.hypot(s.x - sl.x, s.z - sl.z) < 1.4) return { type: 'ugift', id: g.id };
+        if (Math.hypot(s.x - sl.x, s.z - sl.z) < 0.85) return { type: 'ugift', id: g.id };
       }
+      if (Math.hypot(s.x - CAKE.x, s.z - CAKE.z) < 3.0) return { type: 'cake' };
       for (let i = 0; i < STALLS.length; i++) {
         const stl = STALLS[i];
         const front = (s.x - stl.x) * -stl.side; // distance in front of the counter
@@ -282,22 +333,74 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
       }
       return null;
     }
+    // roller coaster: one lap along the track (E or Space again = get off early)
+    const say = (m) => { if (world.current.say) world.current.say(m); };
+    function beginRide(id, seat, dur) {
+      s.ride = { id, t0: Date.now(), dur, seat };
+      if (id === 'hotair') Object.assign(balloonState, { mine: true, vx: 0, vy: 0, vz: 0, inp: { x: 0, z: 0, y: 0 } });
+      s.emote = null; s.vy = 0; s.y = 0;
+      const cam = { coaster: [6.5, 0.35], ferris: [10, 0.22], hotair: [11, 0.3], tower: [9, 0.2], pirate: [11, 0.25], jhoola: [10, 0.25], carousel: [8, 0.3], swing: [8, 0.3] }[id] || [8, 0.3];
+      s.dist = Math.max(s.dist, cam[0]); s.pitch = cam[1];
+      if (id === 'tower') s.ride.h = 0;
+      say(id === 'tower' ? '🗼 Lift upar ja rahi hai! Mouse drag se chaaro taraf dekho • E = neeche aao' : id === 'hotair' ? '🎈 Balloon tumhare haath mein! W/A/S/D = udao • R = upar • F = neeche • E = utar jao' : `${RIDES[id].emoji} ${RIDES[id].name}: maze karo! Utarne ke liye E ya Space dabao`);
+    }
+    function startRide(id) {
+      if (id === 'hotair') {
+        // the balloon is steered by whoever is in it: the server decides if there is room and it is on the ground
+        if (!hotairCanBoard()) { say('🎈 Balloon abhi udd raha hai! Jab wo neeche aaye tab baithna'); return; }
+        if (s.boarding) return;
+        s.boarding = true;
+        socket.emit('balloonjoin', (r) => {
+          s.boarding = false;
+          if (s.ride || !r) return;
+          if (!r.ok) { say(r.why === 'full' ? '🎈 Basket full hai: sirf 2 log baith sakte hain' : r.why === 'air' ? '🎈 Balloon abhi udd raha hai!' : '🎈 Balloon ke paas jao'); return; }
+          beginRide('hotair', r.seat, 3600);
+        });
+        return;
+      }
+      beginRide(id, id === 'coaster' ? 0 : pickSeat(id, s.x, s.z, syncedNow() / 1000), 0);
+    }
+    function endRide() {
+      const info = s.ride && RIDES[s.ride.id];
+      if (s.ride && s.ride.id === 'tower' && !s.ride.down) { s.ride.down = true; return; } // the lift brings you down first
+      const bal = s.ride && s.ride.id === 'hotair';
+      s.ride = null;
+      if (bal) {
+        socket.emit('balloonleave'); balloonState.mine = false;
+        // you step out wherever the balloon is: straight down next to it
+        const away = Math.hypot(balloonState.x - FUN.hotair.x, balloonState.z - FUN.hotair.z) > 3.5;
+        s.x = away ? clamp(balloonState.x, -FUN.B, FUN.B) : info.exit.x;
+        s.z = away ? clamp(balloonState.z + 2.4, -FUN.B, FUN.B) : info.exit.z;
+      } else if (info) { s.x = info.exit.x; s.z = info.exit.z; }
+      s.y = 0; s.vy = 0;
+    }
     function interact() {
+      if (s.ride) { endRide(); return; }
       const n = nearest();
       if (!n) return;
-      if (n.type === 'cake') requestCandles();
+      if (n.type === 'portal') socket.emit('goto', n.to);
+      else if (n.type === 'ride') startRide(n.id);
+      else if (n.type === 'booth') { if (onBooth) onBooth(n.id); }
+      else if (n.type === 'cake') requestCandles();
       else if (n.type === 'stall') onEat(n.i);
       else if (n.type === 'ugift') onUserGift(n.id);
       else onGift(n.i);
     }
     world.current.nearest = nearest;
     world.current.interact = interact;
+    // click on a ride: board it if you are near its glowing ring
+    world.current.tryBoard = (id) => {
+      const st = RIDES[id] && RIDES[id].stand;
+      if (!st || s.ride || Math.hypot(s.x - st.x, s.z - st.z) > 7) return false;
+      startRide(id);
+      return true;
+    };
 
     const kd = (e) => {
       if (typing()) return;
       const k = e.key.toLowerCase();
       keys.current[k] = true;
-      if (k === ' ') { e.preventDefault(); jump(); }
+      if (k === ' ') { e.preventDefault(); if (s.ride) endRide(); else jump(); }
       if (k === '1') setEmote('wave', 2500);
       if (k === '2') world.current.emote('dance');
       if (k === '3') world.current.confetti();
@@ -335,19 +438,54 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
       window.removeEventListener('pointermove', pm);
       el.removeEventListener('wheel', wheel);
     };
-  }, [gl, camera, world, socket, me.role, onGift, onEat, onUserGift, requestCandles]);
+  }, [gl, camera, world, socket, me.role, onGift, onEat, onUserGift, onBooth, requestCandles]);
 
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.05);
     const s = st.current;
-    const k = keys.current;
+    const k = world.current.paused ? {} : keys.current; // a pop-up game is open: stand still
+    const inFun = world.current.where === 'fun';
+    if (s.ride) {
+      const el = (Date.now() - s.ride.t0) / 1000, info = RIDES[s.ride.id];
+      if (s.ride.id === 'tower') { // the lift: up to the deck, wait there until you get off, then back down
+        if (el > (s.ride.dur || info.dur)) s.ride.down = true;
+        const ldt = Math.min(rawDt, 0.5); // the lift keeps its speed even on a slow computer
+        s.ride.h = s.ride.down ? Math.max(0, s.ride.h - 8 * ldt) : Math.min(TOWER_H, s.ride.h + 5 * ldt);
+        s.y = s.ride.h;
+        if (s.ride.down) { const k2 = Math.min(1, dt * 6); s.x += (FUN.tower.x - s.x) * k2; s.z += (FUN.tower.z + 0.2 - s.z) * k2; }
+        else if (s.ride.h < TOWER_H) { s.x = FUN.tower.x; s.z = FUN.tower.z + 0.2; } // rising in the lift; at the top you walk freely
+        if (s.ride.down && s.ride.h <= 0) { s.ride = null; s.x = info.exit.x; s.z = info.exit.z; s.y = 0; s.vy = 0; }
+      } else if (el >= (s.ride.dur || info.dur)) endRide();
+      else if (s.ride.id === 'coaster') {
+        const pt = coasterCurve.getPointAt(el / RIDE_SECS), tg = coasterCurve.getTangentAt(el / RIDE_SECS);
+        s.x = pt.x; s.z = pt.z; s.y = pt.y + 0.3;
+        s.ry = Math.atan2(tg.x, tg.z);
+        let dyaw = Math.atan2(-tg.x, -tg.z) - s.yaw; // the camera swings round behind the car
+        dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+        s.yaw += dyaw * Math.min(1, dt * 2.2);
+      } else {
+        const pose = ridePose(s.ride.id, s.ride.seat, syncedNow() / 1000);
+        s.x = pose.x; s.y = pose.y; s.z = pose.z; s.ry = pose.ry;
+      }
+    }
     const fx = -Math.sin(s.yaw), fz = -Math.cos(s.yaw);
     const rx = Math.cos(s.yaw), rz = -Math.sin(s.yaw);
     const f = (k['w'] || k['arrowup'] ? 1 : 0) - (k['s'] || k['arrowdown'] ? 1 : 0);
     const r = (k['d'] || k['arrowright'] ? 1 : 0) - (k['a'] || k['arrowleft'] ? 1 : 0);
     let dx = fx * f + rx * r, dz = fz * f + rz * r;
     const len = Math.hypot(dx, dz);
-    const moving = len > 0;
+    const onDeck = !!(s.ride && s.ride.id === 'tower' && !s.ride.down && s.ride.h >= TOWER_H);
+    const moving = len > 0 && (!s.ride || onDeck);
+    if (s.ride && s.ride.id === 'hotair') { // steer the balloon: the server moves it, we only send what the pilot is pressing
+      const ix = len ? dx / Math.max(1, len) : 0, iz = len ? dz / Math.max(1, len) : 0;
+      const iy = (k['r'] || k['q'] || k['shift'] || k['pageup'] ? 1 : 0) - (k['f'] || k['z'] || k['c'] || k['pagedown'] ? 1 : 0);
+      balloonState.inp = { x: ix, z: iz, y: iy };
+      const sig = `${ix.toFixed(2)},${iz.toFixed(2)},${iy}`, tnow = performance.now();
+      if (sig !== s.balSig || tnow - (s.balAt || 0) > 150) {
+        s.balSig = sig; s.balAt = tnow;
+        socket.emit('balloonin', { x: ix, z: iz, y: iy });
+      }
+    }
 
     if (moving) {
       dx /= len; dz /= len;
@@ -360,6 +498,26 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
     }
 
     // room bounds + solid things
+    if (inFun) {
+      if (onDeck) { // the deck is a round platform: you can walk about on it but not off it
+        const ox = s.x - FUN.tower.x, oz = s.z - FUN.tower.z, d = Math.hypot(ox, oz);
+        if (d > 4.1) { s.x = FUN.tower.x + (ox / d) * 4.1; s.z = FUN.tower.z + (oz / d) * 4.1; }
+      }
+      if (!s.ride) {
+        s.x = clamp(s.x, -FUN.B, FUN.B); s.z = clamp(s.z, -FUN.B, FUN.B);
+        for (const b of FUN_BLOCKS) { // the rides are solid
+          const ox = s.x - b.x, oz = s.z - b.z, d = Math.hypot(ox, oz);
+          if (d < b.r) { const m = d || 1; s.x = b.x + (ox / m) * b.r; s.z = b.z + (oz / m) * b.r; }
+        }
+        for (const b of FUN_RECTS) { // the stall counters are solid too
+          const ox = s.x - b.x, oz = s.z - b.z, hx = b.w / 2 + 0.35, hz = b.d / 2 + 0.35;
+          if (Math.abs(ox) < hx && Math.abs(oz) < hz) {
+            if (hx - Math.abs(ox) < hz - Math.abs(oz)) s.x = b.x + Math.sign(ox || 1) * hx;
+            else s.z = b.z + Math.sign(oz || 1) * hz;
+          }
+        }
+      }
+    } else {
     s.x = clamp(s.x, -BX, BX); s.z = clamp(s.z, -BZ, BZ);
     const cx = s.x - CAKE.x, cz = s.z - CAKE.z, cd = Math.hypot(cx, cz), minD = TABLE_R + 0.35;
     if (cd < minD) { const m = cd || 1; s.x = CAKE.x + (cx / m) * minD; s.z = CAKE.z + (cz / m) * minD; }
@@ -375,9 +533,10 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
         else s.z = b.z + Math.sign(oz || 1) * hz;
       }
     }
+    }
 
     // jump physics
-    if (s.y > 0 || s.vy > 0) {
+    if (!s.ride && (s.y > 0 || s.vy > 0)) {
       s.vy -= 14 * dt; s.y += s.vy * dt;
       if (s.y <= 0) { s.y = 0; s.vy = 0; }
     }
@@ -385,9 +544,9 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
     if (s.emote && performance.now() > s.emoteUntil) s.emote = null;
     // Standing still on the dance floor means dancing (can be switched off with the Auto-dance button).
     // Nobody is ever forced to dance elsewhere, not even during the celebration: Dance (key 2) is optional.
-    const floor = onDanceFloor(s.x, s.z) && s.y < 0.6;
+    const floor = !inFun && !s.ride && onDanceFloor(s.x, s.z) && s.y < 0.6;
     if (floor !== s.onFloor) { s.onFloor = floor; onFloor(floor); }
-    s.anim = s.y > 0.02 ? 'jump' : moving ? 'walk' : s.emote || (floor && world.current.autoDance !== false ? 'dance' : 'idle');
+    s.anim = s.ride ? (s.ride.id === 'coaster' ? 'ride' : s.ride.id === 'tower' ? (moving ? 'walk' : 'idle') : 'sit') : s.y > 0.02 ? 'jump' : moving ? 'walk' : s.emote || (floor && world.current.autoDance !== false ? 'dance' : 'idle');
 
     if (grp.current) {
       grp.current.position.set(s.x, s.y, s.z);
@@ -401,20 +560,21 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
     const solve = (pitch) => {
       const cp = Math.cos(pitch);
       const dx = Math.sin(s.yaw) * cp, dy = Math.sin(pitch), dz = Math.cos(s.yaw) * cp;
-      const d = Math.max(2.4, Math.min(
+      const d = inFun ? s.dist : Math.max(2.4, Math.min(
         s.dist, reach(s.x, dx, -(HX - 0.8), HX - 0.8), reach(s.z, dz, -(HZ - 0.8), HZ - 0.8), reach(1.3, dy, 0.8, WALL_H - 0.8),
       ));
       return { dx, dy, dz, d };
     };
     let cam = solve(s.pitch);
     if (cam.d < s.dist * 0.75) cam = solve(Math.min(1.15, s.pitch + (1 - cam.d / s.dist) * 0.9));
-    camTarget.set(s.x + cam.dx * cam.d, 1.3 + cam.dy * cam.d, s.z + cam.dz * cam.d);
+    const by = s.ride ? s.y : 0; // on the coaster the camera rides along high up
+    camTarget.set(s.x + cam.dx * cam.d, by + 1.3 + cam.dy * cam.d, s.z + cam.dz * cam.d);
     camera.position.lerp(camTarget, 1 - Math.pow(0.001, dt));
-    camera.lookAt(s.x, 1.3 + s.y * 0.5, s.z);
+    camera.lookAt(s.x, by + 1.3 + (s.ride ? 0 : s.y * 0.5), s.z);
 
-    // heart pickups (Heart Hunt)
+    // cake-slice pickups (Cake Hunt)
     const hs = world.current.hearts;
-    if (hs) {
+    if (hs && !inFun) {
       const now = performance.now();
       for (const h of hs) {
         if (Math.hypot(s.x - h.x, s.z - h.z) < 1.2) {
@@ -428,12 +588,12 @@ function Me({ me, socket, world, bubble, react, out, onPrompt, onFloor, onGift, 
     const now = performance.now();
     if (now - s.lastSend > 66) {
       s.lastSend = now;
-      socket.emit('move', { x: s.x, y: s.y, z: s.z, ry: s.ry, anim: s.anim });
+      socket.emit('move', { x: s.x, y: s.y, z: s.z, ry: s.ry, anim: s.anim, w: inFun ? 'fun' : 'hall' });
     }
 
     // interaction prompt
-    const n = world.current.nearest && world.current.nearest();
-    const p = n ? (n.type === 'stall' ? 'stall' + n.i : n.type === 'ugift' ? 'ugift' + n.id : n.type) : '';
+    const n = s.ride ? { type: 'riding', left: s.ride.id === 'hotair' ? 'balloon' : s.ride.id === 'tower' ? 'tower' : Math.max(0, Math.ceil((s.ride.dur || RIDES[s.ride.id].dur) - (Date.now() - s.ride.t0) / 1000)) } : world.current.nearest && world.current.nearest();
+    const p = n ? (n.type === 'stall' ? 'stall' + n.i : n.type === 'ugift' ? 'ugift' + n.id : n.type === 'portal' ? 'portal' + n.to : n.type === 'riding' ? 'riding:' + n.left : n.type === 'ride' ? 'ride:' + n.id : n.type === 'booth' ? 'booth:' + n.id : n.type) : '';
     if (p !== s.prompt) { s.prompt = p; onPrompt(p); }
   });
 
@@ -610,7 +770,7 @@ function Room() {
   const wallSide = useMemo(() => wallFor(HZ * 2 + 0.8), [wallTex]);
   const wallBackMat = <meshStandardMaterial map={wallBack} roughness={0.95} />;
   const wallSideMat = <meshStandardMaterial map={wallSide} roughness={0.95} />;
-  const rugs = [[5.6, '#ff7eb6'], [4.2, '#fff0f6'], [2.4, '#ffd166']];
+  const rugs = [[6.8, '#ff7eb6'], [5.2, '#fff0f6'], [2.9, '#ffd166']]; // the party area around the cake
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
@@ -909,6 +1069,25 @@ function Stall({ st, i, onEat }) {
     g.font = '700 84px "Dancing Script", cursive';
     g.fillText(st.emoji + ' ' + st.name, w / 2, h / 2 + 4);
   }, 512, 160);
+  // meme board in the middle of the stall: big emoji picture, white caption with a black outline above and below
+  const meme = useTextTexture((g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+    const bg = g.createLinearGradient(0, 0, w, h);
+    bg.addColorStop(0, st.color); bg.addColorStop(1, '#2b1b3d');
+    g.fillStyle = bg; g.fillRect(10, 10, w - 20, h - 20);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '170px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+    g.fillText(st.emoji, w / 2, h / 2 + 6);
+    const cap = (t, y) => {
+      let px = 56;
+      g.font = `900 ${px}px Impact, "Arial Black", sans-serif`;
+      while (g.measureText(t).width > w - 44 && px > 24) { px -= 3; g.font = `900 ${px}px Impact, "Arial Black", sans-serif`; }
+      g.lineJoin = 'round'; g.lineWidth = px / 5; g.strokeStyle = '#000'; g.strokeText(t, w / 2, y);
+      g.fillStyle = '#fff'; g.fillText(t, w / 2, y);
+    };
+    cap(st.meme[0], 52); cap(st.meme[1], h - 52);
+  }, 512, 320);
   const stripes = ['#ff4f9a', '#ffffff'];
   return (
     <group
@@ -929,6 +1108,7 @@ function Stall({ st, i, onEat }) {
         ))}
       </group>
       <mesh position={[0, 3.65, -0.5]}><planeGeometry args={[2.6, 0.81]} /><meshBasicMaterial map={sign} transparent /></mesh>
+      <mesh position={[0, 2.0, -0.585]}><planeGeometry args={[2.4, 1.5]} /><meshBasicMaterial map={meme} toneMapped={false} /></mesh>
       <StallProps id={st.id} />
     </group>
   );
@@ -1018,6 +1198,9 @@ function wrapLines(g, text, maxW) {
   if (cur) lines.push(cur);
   return lines;
 }
+
+const SLIDE_COUNT = 9; // public/photos/m1.jpg ... m9.jpg
+const SLIDE_MS = 5000;
 
 function paintScreen(g, w, h, s, imgs, onImg) {
   g.clearRect(0, 0, w, h);
@@ -1121,13 +1304,44 @@ function paintScreen(g, w, h, s, imgs, onImg) {
     return;
   }
 
-  // idle
-  center('🎈 Balloon phodo!', 120, `700 112px ${DS}`, '#fff');
-  center('Har balloon ke andar ek surprise message hai', 215, `400 44px ${PP}`, '#ffd166');
+  // idle: Manisha's photos (one every few seconds) on the left, the usual hints on the right
+  const slide = Math.floor(Date.now() / SLIDE_MS) % SLIDE_COUNT;
+  const slideImg = (n) => {
+    let img = imgs.get('slide' + n);
+    if (!img) { img = new Image(); img.onload = onImg; img.src = `/photos/m${n + 1}.jpg`; imgs.set('slide' + n, img); }
+    return img;
+  };
+  slideImg((slide + 1) % SLIDE_COUNT); // warm the next one
+  const pic = slideImg(slide);
+  g.save();
+  g.translate(262, 256); g.rotate(-0.035);
+  g.fillStyle = '#fff'; g.shadowColor = 'rgba(0,0,0,.5)'; g.shadowBlur = 24;
+  g.fillRect(-212, -232, 424, 464);
+  g.shadowBlur = 0;
+  const pw = 384, ph = 386;
+  if (pic.complete && pic.naturalWidth) {
+    const k = Math.max(pw / pic.naturalWidth, ph / pic.naturalHeight);
+    const sw = pw / k, sh = ph / k;
+    // crop biased towards the top so faces stay in the frame
+    g.drawImage(pic, (pic.naturalWidth - sw) / 2, (pic.naturalHeight - sh) * 0.25, sw, sh, -192, -212, pw, ph);
+  } else { g.fillStyle = '#f3d6e2'; g.fillRect(-192, -212, pw, ph); }
+  g.fillStyle = '#7a1f5c'; g.font = `700 46px ${DS}`; g.textAlign = 'center';
+  g.fillText('💖 ' + HOST, 0, 200);
+  g.restore();
+
+  const left = 540, maxW = w - left - 60;
+  g.textAlign = 'left';
+  g.font = `500 32px ${PP}`; g.fillStyle = '#ffd166';
+  g.fillText('🎈 Balloon phodo! Har balloon mein ek surprise message hai', left, 64);
+  g.font = `700 66px ${DS}`; g.fillStyle = '#fff';
+  wrapLines(g, SCREEN_MESSAGE, maxW).slice(0, 3).forEach((l, i) => g.fillText(l, left, 150 + i * 80));
   const sc = s.scores || [];
-  center(sc.length ? '💖 Heart Hunt: ' + sc.slice(0, 3).map((t, i) => `${['🥇', '🥈', '🥉'][i]} ${t.name} ${t.n}`).join('   ')
-    : '💖 Heart Hunt: floating hearts ikatthe karo, leaderboard yahan dikhega', 315, `600 42px ${PP}`, '#fff');
-  center('🎁 Manisha ke liye gift bhejna ho to "Gift bhejo" dabao', 405, `400 36px ${PP}`, 'rgba(255,255,255,.7)');
+  g.font = `600 30px ${PP}`; g.fillStyle = '#ffe9a8';
+  const hh = sc.length ? '🍰 Cake Hunt: ' + sc.slice(0, 3).map((t, i) => `${['🥇', '🥈', '🥉'][i]} ${t.name} ${t.n}`).join('   ')
+    : '🍰 Cake Hunt: cake katne ke baad slices aayenge, ikatthe karo';
+  g.fillText(wrapLines(g, hh, maxW)[0], left, 448);
+  g.font = `400 26px ${PP}`; g.fillStyle = 'rgba(255,255,255,.7)';
+  g.fillText('🎁 Manisha ke liye gift bhejna ho to "Gift bhejo" dabao', left, 484);
 }
 
 function GameScreen({ screen }) {
@@ -1143,12 +1357,14 @@ function GameScreen({ screen }) {
     return { canvas: c, tex: t };
   }, []);
 
-  const ticking = !!(screen && screen.endsAt);
+  // timed games repaint often (countdowns); the idle screen only needs to flip photos
+  const ticking = !!(screen && (screen.endsAt || screen.mode === 'idle'));
+  const tickMs = screen && screen.endsAt ? 400 : 1000;
   useEffect(() => {
     if (!ticking) return undefined;
-    const id = setInterval(() => setNow(Date.now()), 400);
+    const id = setInterval(() => setNow(Date.now()), tickMs);
     return () => clearInterval(id);
-  }, [ticking]);
+  }, [ticking, tickMs]);
 
   useEffect(() => {
     const paint = () => {
@@ -1168,8 +1384,8 @@ function GameScreen({ screen }) {
         <planeGeometry args={[HX * 2, WALL_H]} />
         <meshStandardMaterial color="#ffdbe8" roughness={0.95} />
       </mesh>
-      <mesh position={[0, 3.6, HZ - 0.06]} rotation={[0, Math.PI, 0]}>
-        <planeGeometry args={[12, 4]} />
+      <mesh position={[0, 3.7, HZ - 0.06]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[16, 5.33]} />
         <meshBasicMaterial map={tex} transparent toneMapped={false} />
       </mesh>
     </group>
@@ -1454,11 +1670,16 @@ function Celebration({ active }) {
 export default function Scene({
   me, others, bubbles, reacts, outIds, world, socket, candlesLit, popped, screen, hearts, userGifts, rlActive,
   guests, hereNames, fresh, clock, celebrating,
-  streams, localStream, onPrompt, onFloor, onGift, onEat, onUserGift, onPop, requestCandles,
+  streams, localStream, onPrompt, onFloor, onGift, onEat, onUserGift, onPop, requestCandles, where, onPortal, onBooth, onRide,
 }) {
   const people = useMemo(() => [me, ...others], [me, others]);
+  const [low, setLow] = useState(false);
   return (
-    <Canvas shadows camera={{ fov: 55, position: [0, 7, 12], near: 0.3, far: 150 }} dpr={[1, 1.5]}>
+    <Canvas shadows={!low} camera={{ fov: 55, position: [0, 7, 12], near: 0.3, far: 150 }} dpr={low ? 1 : [1, 1.5]}>
+      {/* a slow computer or phone? after a few seconds of low FPS the scene quietly switches to a lighter look */}
+      <PerformanceMonitor bounds={() => [26, 200]} flipflops={2} ms={800} onDecline={() => setLow(true)} />
+      {where === 'fun' ? <FunWorld onPortal={onPortal} onBooth={onBooth} onRide={onRide} low={low} /> : (
+      <>
       {/* soft twilight outside, warm light inside: the cream walls must read as cream, not purple */}
       <color attach="background" args={['#2c1f5e']} />
       <fog attach="fog" args={['#2c1f5e', 45, 120]} />
@@ -1484,12 +1705,15 @@ export default function Scene({
       <VideoWall people={people} streams={streams} localStream={localStream} meId={me.id} />
       {rlActive && <GameLines />}
       {BALLOONS.filter((b) => !popped.includes(b.id)).map((b) => <Balloon key={b.id} b={b} onPop={onPop} />)}
-      {hearts.map((h) => <FloatEmoji key={h.id} emoji="💖" position={[h.x, 1.2, h.z]} size={0.95} bob={0.18} spin />)}
+      {hearts.map((h) => <FloatEmoji key={h.id} emoji="🍰" position={[h.x, 1.2, h.z]} size={0.95} bob={0.18} spin />)}
+      <Portal position={[HALL_PORTAL.x, 0, 14.25]} rotation={[0, Math.PI, 0]} label="🌈 Masti Duniya" c1="#ff8e53" c2="#2a9d8f" onClick={() => onPortal && onPortal('fun')} />
+      </>
+      )}
 
-      {others.map((p) => <Remote key={p.id} p={p} world={world} bubble={bubbles[p.id]} react={reacts[p.id]} out={!!outIds[p.id]} />)}
+      {others.filter((p) => (p.world || 'hall') === where).map((p) => <Remote key={p.id} p={p} world={world} bubble={bubbles[p.id]} react={reacts[p.id]} out={!!outIds[p.id]} />)}
       <Me
         me={me} socket={socket} world={world} bubble={bubbles[me.id]} react={reacts[me.id]} out={!!outIds[me.id]}
-        onPrompt={onPrompt} onFloor={onFloor} onGift={onGift} onEat={onEat} onUserGift={onUserGift} requestCandles={requestCandles}
+        onPrompt={onPrompt} onFloor={onFloor} onGift={onGift} onEat={onEat} onUserGift={onUserGift} onBooth={onBooth} requestCandles={requestCandles}
       />
       <Confetti />
     </Canvas>
