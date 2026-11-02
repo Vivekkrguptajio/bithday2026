@@ -199,8 +199,13 @@ app.prepare().then(async () => {
 
       let name = clean(data && data.name, 16);
       if (role === 'girl') {
-        if ([...players.values()].some((p) => p.role === 'girl')) {
-          return ack({ ok: false, error: 'Birthday girl pehle se room mein hai. Kuch second baad try karo.' });
+        // Sahi code wala naya login purane (refresh / atke hue) connection ko hata deta hai.
+        for (const old of [...players.values()]) {
+          if (old.role === 'girl' && old.id !== socket.id) {
+            const os = io.sockets.sockets.get(old.id);
+            if (os) os.disconnect(true); // disconnect handler cleans up and broadcasts 'left'
+            if (players.has(old.id)) { players.delete(old.id); games.onLeave(old.id); io.emit('left', old.id); }
+          }
         }
         name = cfg.GIRL_NAME;
       } else if (role === 'admin') {
