@@ -227,6 +227,39 @@ function danceBlock(a, t0) {
   }
 }
 
+/* YouTube party mix: plays (hidden player) only while someone stands on the dance floor. */
+const PARTY_YT = 'zwRMJGRx6HM'; // set to '' to go back to the mp3 / built-in synth song
+let yt = null; // { p: YT.Player, ready: bool }
+let ytWant = false; // is the player currently supposed to be playing?
+
+function ytLoad() {
+  if (!PARTY_YT || yt || typeof document === 'undefined') return;
+  yt = { p: null, ready: false };
+  const make = () => {
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;right:0;bottom:0;width:200px;height:200px;opacity:0.01;pointer-events:none;z-index:-1;overflow:hidden';
+    const host = document.createElement('div');
+    box.appendChild(host);
+    document.body.appendChild(box);
+    yt.p = new window.YT.Player(host, {
+      width: 200, height: 200, videoId: PARTY_YT,
+      playerVars: { autoplay: 0, controls: 0, loop: 1, playlist: PARTY_YT, playsinline: 1, rel: 0, modestbranding: 1 },
+      events: {
+        onReady: () => { yt.ready = true; try { yt.p.setVolume(85); } catch {} if (ytWant) { try { yt.p.playVideo(); } catch {} } },
+        onError: () => { yt.failed = true; }, // video not embeddable / removed: fall back silently to the synth song
+      },
+    });
+  };
+  if (window.YT && window.YT.Player) make();
+  else {
+    const prev = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => { if (prev) prev(); make(); };
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    document.head.appendChild(s);
+  }
+}
+
 function startDance() {
   const a = ac();
   if (!a || danceOn) return;
@@ -234,6 +267,12 @@ function startDance() {
   const t = a.currentTime;
   danceBus.gain.cancelScheduledValues(t);
   danceBus.gain.setTargetAtTime(1, t, 0.12);
+  if (PARTY_YT) {
+    ytLoad();
+    ytWant = true;
+    if (yt && yt.ready && !yt.failed) { try { yt.p.playVideo(); } catch {} return; }
+    if (yt && !yt.failed) return; // still loading: onReady will start it
+  }
   if (songs.party) {
     if (!fileEl) { fileEl = new Audio(songs.party); fileEl.loop = true; fileEl.volume = 0.85; }
     fileEl.play().catch(() => {});
@@ -251,6 +290,8 @@ function stopDance() {
   if (!danceOn) return;
   danceOn = false;
   clearInterval(danceTimer);
+  ytWant = false;
+  if (yt && yt.ready) { try { yt.p.pauseVideo(); } catch {} }
   const a = ac();
   if (a) { danceBus.gain.cancelScheduledValues(a.currentTime); danceBus.gain.setTargetAtTime(0, a.currentTime, 0.1); }
   setTimeout(() => {

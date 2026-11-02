@@ -1333,8 +1333,16 @@ function paintScreen(g, w, h, s, imgs, onImg) {
   g.textAlign = 'left';
   g.font = `500 32px ${PP}`; g.fillStyle = '#ffd166';
   g.fillText('🎈 Balloon phodo! Har balloon mein ek surprise message hai', left, 64);
-  g.font = `700 66px ${DS}`; g.fillStyle = '#fff';
-  wrapLines(g, SCREEN_MESSAGE, maxW).slice(0, 3).forEach((l, i) => g.fillText(l, left, 150 + i * 80));
+  g.fillStyle = '#fff';
+  // long message: shrink the font until every line fits above the Cake Hunt row
+  let fs = 66, msgLines = [];
+  for (; fs >= 28; fs -= 4) {
+    g.font = `700 ${fs}px ${DS}`;
+    msgLines = wrapLines(g, SCREEN_MESSAGE, maxW);
+    if (msgLines.length * fs * 1.2 <= 290) break;
+  }
+  g.font = `700 ${fs}px ${DS}`;
+  msgLines.slice(0, 7).forEach((l, i) => g.fillText(l, left, 90 + fs + i * fs * 1.2));
   const sc = s.scores || [];
   g.font = `600 30px ${PP}`; g.fillStyle = '#ffe9a8';
   const hh = sc.length ? '🍰 Cake Hunt: ' + sc.slice(0, 3).map((t, i) => `${['🥇', '🥈', '🥉'][i]} ${t.name} ${t.n}`).join('   ')

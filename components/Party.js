@@ -149,7 +149,7 @@ export default function Party() {
   // Manisha's welcome confetti, once the party scene is really on screen
   useEffect(() => {
     if (stage !== 'room' || !me || me.role !== 'girl') return undefined;
-    const t = setTimeout(() => { bus.confetti && bus.confetti(0, 2, -1.8, 320, PINK); playTada(); }, 900);
+    const t = setTimeout(() => { bus.confetti && bus.confetti(0, 2, -1.8, 320, PINK); }, 900);
     return () => clearTimeout(t);
   }, [stage]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -200,8 +200,7 @@ export default function Party() {
     if (c.active) {
       addChat({ sys: true, text: `🎉🎉 12 baj gaye! HAPPY BIRTHDAY ${HOST.toUpperCase()}! Celebration shuru! 🎂🎆` });
       flash('🎉 HAPPY BIRTHDAY! Celebration shuru!');
-      playTada();
-      if (musicRef.current) startMusic();
+      // koi fanfare nahi; gaana pehle se chal raha hai, use restart nahi karte
       [-1, 1].forEach((s) => bus.confetti && bus.confetti(s * 14, 4.6, 0, 200, null, [-s * 8, 0]));
     } else addChat({ sys: true, text: 'Celebration khatam, par party chalti rahegi! 🥳' });
   }, [addChat, flash]);
@@ -294,7 +293,7 @@ export default function Party() {
         // Joined. The 3D landing page now finishes its walk through the door and then calls onArrived() -> stage 'room'.
         setJoined(true);
         setBusy(false);
-        startMusic();
+        startMusic(); // Happy Birthday gaana join karte hi shuru, loop mein chalta rehta hai
       });
     });
 
@@ -310,10 +309,9 @@ export default function Party() {
       if (p.role === 'girl') {
         addChat({ sys: true, text: '👑 Manisha party mein aa gayi! Sab swagat karo 🎉💖' });
         bus.confetti && bus.confetti(p.x, 2, p.z, 320, PINK);
-        if (musicRef.current) startMusic();
+        if (musicRef.current && !world.current.celebrating) startMusic();
         flash('👑 Birthday Girl aa gayi!');
       } else addChat({ sys: true, text: `${badge(p.role)}${p.name} party mein aaye 🥳` });
-      playTada();
     });
     socket.on('left', (id) => {
       const gone = world.current.others.get(id);
